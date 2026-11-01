@@ -161,3 +161,21 @@ def test_partial_status_when_source_had_failures(conn, seed):
     run = conn.execute("SELECT status, stats_json FROM screening_runs WHERE id = ?", (run_id,)).fetchone()
     assert run["status"] == "partial"
     assert json.loads(run["stats_json"])["failures"] == ["eastmoney: 超时"]
+
+
+def test_stale_snapshot_is_recorded_in_run_stats(conn, seed):
+    seed("600001")
+    run_id = screening_service.create_run(conn, {"scope": "all"})
+    screening_service.execute_run(
+        conn,
+        run_id,
+        prefetched=FetchResult(
+            [make_quote()], "cache", 1, 1,
+            failures=["tencent: 超时"], stale=True, as_of="2026-10-30",
+        ),
+    )
+    run = conn.execute("SELECT status, stats_json FROM screening_runs WHERE id = ?", (run_id,)).fetchone()
+    stats = json.loads(run["stats_json"])
+    assert run["status"] == "partial"
+    assert stats["stale"] is True
+    assert stats["as_of"] == "2026-10-30"

@@ -14,6 +14,8 @@ export interface RunStats {
   failures?: string[]
   elapsed_ms?: number
   error?: string
+  stale?: boolean
+  as_of?: string | null
 }
 
 export interface Run {
@@ -111,6 +113,12 @@ export interface SystemStatus {
   sources: { total: number; enabled: number; healthy: number }
   last_run: { id: number; status: string; started_at: string; finished_at: string | null; stats: RunStats | null } | null
   last_job: { id: number; job: string; status: string; started_at: string; finished_at: string | null; error: string | null } | null
+  market: {
+    latest_trade_date: string | null
+    latest_fetched_at: string | null
+    degraded: boolean
+    degraded_reason: string | null
+  }
   pool: PoolStats
 }
 

@@ -61,6 +61,30 @@ def test_daily_refresh_runs_screening(db_path, monkeypatch):
     assert job["status"] == "success"
 
 
+def test_daily_refresh_stale_fallback_does_not_auto_screen(db_path, monkeypatch):
+    """定时任务拿到旧快照时应停止自动筛选，避免用过期行情产出新结论。"""
+    monkeypatch.setattr(
+        scheduler.market_service,
+        "fetch_market_snapshot",
+        lambda conn: FetchResult(
+            [make_quote(trade_date="2026-10-30")], "cache", 1, 5,
+            failures=["tencent: 超时"], stale=True, as_of="2026-10-30",
+        ),
+    )
+    result = scheduler.daily_refresh()
+
+    assert result["status"] == "partial"
+    assert result["stale"] is True
+    assert result["trade_date"] == "2026-10-30"
+    conn = db.connect(config.DB_PATH)
+    job = conn.execute("SELECT * FROM job_runs ORDER BY id DESC LIMIT 1").fetchone()
+    runs = conn.execute("SELECT COUNT(*) AS c FROM screening_runs").fetchone()["c"]
+    conn.close()
+    assert job["status"] == "partial"
+    assert "回退" in job["error"]
+    assert runs == 0
+
+
 def test_daily_refresh_failure_is_recorded(db_path, monkeypatch):
     def boom(conn):
         raise RuntimeError("网络中断")

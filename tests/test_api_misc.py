@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import json
 
 from conftest import make_quote
 from src.core import config, db
@@ -162,3 +163,54 @@ def test_system_status(client, seed):
     assert status["pool"]["active"] == 1
     assert status["last_run"] is None
     assert status["last_job"] is None
+    assert status["market"] == {
+        "latest_trade_date": None,
+        "latest_fetched_at": None,
+        "degraded": False,
+        "degraded_reason": None,
+    }
+
+
+def test_system_status_flags_partial_daily_refresh(client):
+    conn = db.connect(config.DB_PATH)
+    with db.transaction(conn):
+        conn.execute(
+            """
+            INSERT INTO job_runs (job, started_at, finished_at, status, error)
+            VALUES ('daily_refresh', ?, ?, 'partial', ?)
+            """,
+            (
+                "2026-10-31T15:30:00",
+                "2026-10-31T15:31:00",
+                "行情源全部失败，回退 2026-10-30 快照，未执行自动筛选",
+            ),
+        )
+    conn.close()
+
+    market = client.get("/api/v1/system/status").json()["market"]
+    assert market["degraded"] is True
+    assert "回退" in market["degraded_reason"]
+
+
+def test_system_status_flags_stale_run(client, seed):
+    seed("600001", quote=make_quote())
+    conn = db.connect(config.DB_PATH)
+    with db.transaction(conn):
+        conn.execute(
+            """
+            INSERT INTO screening_runs (started_at, finished_at, status, params_json, stats_json)
+            VALUES (?, ?, 'partial', '{}', ?)
+            """,
+            (
+                "2026-10-30T15:30:00",
+                "2026-10-30T15:31:00",
+                json.dumps({"stale": True, "as_of": "2026-10-30"}),
+            ),
+        )
+    conn.close()
+
+    market = client.get("/api/v1/system/status").json()["market"]
+    assert market["latest_trade_date"] == "2026-10-30"
+    assert market["latest_fetched_at"] is not None
+    assert market["degraded"] is True
+    assert "旧快照" in market["degraded_reason"]

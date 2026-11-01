@@ -57,10 +57,12 @@ export function Workbench() {
           setRejected(r.items)
           const stats = next.stats
           toast(
-            next.status === 'success'
-              ? `筛选完成 · 候选 ${stats?.candidates ?? c.total} 只 · ${((stats?.elapsed_ms ?? 0) / 1000).toFixed(0)}s`
-              : '筛选完成，但部分数据源失败，结果可能不完整',
-            next.status === 'success' ? 'info' : 'warn',
+            stats?.stale
+              ? `筛选完成，但行情源全部失败，已使用 ${stats.as_of ?? '历史'} 旧快照`
+              : next.status === 'success'
+                ? `筛选完成 · 候选 ${stats?.candidates ?? c.total} 只 · ${((stats?.elapsed_ms ?? 0) / 1000).toFixed(0)}s`
+                : '筛选完成，但部分数据源失败，结果可能不完整',
+            stats?.stale ? 'error' : next.status === 'success' ? 'info' : 'warn',
           )
           api.systemStatus().then(setStatus).catch(() => undefined)
         }
@@ -185,8 +187,10 @@ export function Workbench() {
         </div>
       )}
       {run?.status === 'partial' && (
-        <div className="notice" style={{ marginBottom: 16 }}>
-          部分数据源失败：{(stats?.failures ?? []).join('；') || '结果可能不完整'}
+        <div className={`notice${stats?.stale ? ' notice-error' : ''}`} style={{ marginBottom: 16 }}>
+          {stats?.stale
+            ? `行情降级：所有数据源均不可用，本次使用 ${stats.as_of ?? '历史'} 快照。结果不代表当日行情，请恢复数据源后重跑。`
+            : `部分数据源失败：${(stats?.failures ?? []).join('；') || '结果可能不完整'}`}
         </div>
       )}
 
@@ -206,7 +210,15 @@ export function Workbench() {
               </button>
             </div>
           }
-          extra={<span className="micro">数据来源：{stats?.source ?? '—'} · 抓取于 {fmtTime(run?.finished_at ?? null)}</span>}
+          extra={
+            <span className="micro">
+              数据来源：{stats?.stale ? `缓存快照 ${stats.as_of ?? ''}` : stats?.source ?? '—'}
+              {' · '}
+              {stats?.stale
+                ? `快照日期 ${stats.as_of ?? '—'}`
+                : `抓取于 ${fmtTime(run?.finished_at ?? null)}`}
+            </span>
+          }
         />
         {tab === 'candidates' ? (
           <DataTable

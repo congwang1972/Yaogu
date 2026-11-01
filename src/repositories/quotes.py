@@ -57,3 +57,21 @@ def latest_quotes_all(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     if not d:
         return []
     return list(conn.execute("SELECT * FROM daily_quotes WHERE trade_date = ?", (d,)).fetchall())
+
+
+def latest_snapshot(conn: sqlite3.Connection) -> tuple[str | None, list[sqlite3.Row]]:
+    """最近一个交易日的完整行情，附带股票名称，供数据源全挂时回退。"""
+    d = latest_trade_date(conn)
+    if not d:
+        return None, []
+    rows = conn.execute(
+        """
+        SELECT q.*, s.name
+        FROM daily_quotes q
+        JOIN stocks s ON s.code = q.code
+        WHERE q.trade_date = ?
+        ORDER BY q.code
+        """,
+        (d,),
+    ).fetchall()
+    return d, list(rows)

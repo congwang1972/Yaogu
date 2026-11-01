@@ -24,6 +24,15 @@ def daily_refresh() -> dict:
     job_id = job_repo.start_job(conn, "daily_refresh")
     try:
         fetch = market_service.fetch_market_snapshot(conn)
+        if fetch.stale:
+            # 自动任务拿到旧快照时不再自动产出新结论；保留批次给人工判断，
+            # 同时在 job_runs 留一条 partial，界面据此显示行情降级。
+            message = f"行情源全部失败，回退 {fetch.as_of or '历史'} 快照，未执行自动筛选"
+            job_repo.finish_job(conn, job_id, "partial", message)
+            conn.commit()
+            logger.warning("[DEBUG] daily_refresh 降级 | as_of=%s failures=%s", fetch.as_of, fetch.failures)
+            return {"status": "partial", "stale": True, "trade_date": fetch.as_of}
+
         today = db.today_str()
         latest = quote_repo.latest_trade_date(conn)
         if latest != today:

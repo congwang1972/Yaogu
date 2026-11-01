@@ -8,7 +8,7 @@ A 股短线「妖股」筛选与跟踪工具：抓取公开行情接口 → 按�
 ## 当前阶段
 
 - 一期已实现并通过测试：后端（15 张表、约 30 个端点）、前端 6 个页面、定时任务、CSV 导出。
-- 测试基线：`pytest` 166 passed，覆盖率 93.96%；`npm run build` 通过。
+- 测试基线：`pytest` 172 passed，覆盖率 94.09%；`npm run build` 通过。
 - 已部署到 `http://stock.emic.com.cn`（systemd `yaogu.service`，`/opt/yaogu`）；云机房实测腾讯源可用，东财 502、新浪 403，腾讯可独立获取代码全集。
 - 真实行情接口尚未在部署环境联调；腾讯云出口 IP 可能被部分免费源屏蔽。
 - 项目未初始化 git 仓库：没有 `git diff` 兜底，覆盖文件前先确认原内容。
@@ -80,4 +80,5 @@ bash scripts/run.sh
 - 产品计划部署在腾讯云服务器，已知部分免费股票接口屏蔽腾讯云服务器 IP，需要避开；部署后先在「数据源」页实测。
 - sqlite 写操作经 `core/db.py` 的全局锁串行化，新增写路径必须用 `db.transaction(conn)`，否则可能 `database is locked`。
 - `skipped`（门槛未启用）不否决候选；`unavailable`（数据缺失）既不通过也不淘汰，界面必须显示「待确认」。
+- 所有启用源都失败时，`fetch_market_snapshot` 会回退最近一份 `daily_quotes` 快照并标记 `stale=True` / `as_of`；调用方不得把它当作当日行情，界面必须显示「行情降级」。每日定时任务遇到 `stale` 只记 `job_runs.status=partial`，不自动发起筛选。
 - `with_theme=true` 的批次，候选会排除未命中题材池的标的；候选数与 `screening_results` 同源计算。

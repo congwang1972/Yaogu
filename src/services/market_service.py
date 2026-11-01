@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 
 
 class MarketUnavailable(Exception):
-    """全部数据源都失败。保留旧快照，由调用方决定如何提示。"""
+    """没有可用行情：全部源失败，且没有可回退的完整历史快照。"""
 
 
 def _valid(q: Quote) -> bool:
@@ -35,11 +35,69 @@ def _universe(conn: sqlite3.Connection) -> list[str]:
     return [r["code"] for r in conn.execute("SELECT code FROM stocks").fetchall()]
 
 
+def _row_to_quote(row: sqlite3.Row) -> Quote:
+    return Quote(
+        code=row["code"],
+        name=row["name"],
+        trade_date=row["trade_date"],
+        close=row["close"],
+        pre_close=row["pre_close"],
+        open=row["open"],
+        high=row["high"],
+        low=row["low"],
+        pct_chg=row["pct_chg"],
+        volume=row["volume"],
+        amount=row["amount"],
+        turnover_rate=row["turnover_rate"],
+        total_mv=row["total_mv"],
+        float_mv=row["float_mv"],
+        limit_up=row["limit_up"],
+        source=row["source"],
+        fetched_at=row["fetched_at"],
+    )
+
+
+def _stale_snapshot(conn: sqlite3.Connection, failures: list[str], elapsed_ms: int) -> FetchResult:
+    """所有源都失败时的最后兜底：只读最近一份完整快照，绝不写回旧数据。
+
+    冻结口径：快照条目数同样受 MIN_QUOTE_COUNT 约束，避免拿一份残缺数据
+    继续产出「看起来正常」的筛选结果。
+    """
+    as_of, rows = quote_repo.latest_snapshot(conn)
+    quotes = [q for row in rows if _valid(q := _row_to_quote(row))]
+    if not quotes or len(quotes) < config.MIN_QUOTE_COUNT:
+        raise MarketUnavailable(
+            "; ".join(
+                failures
+                + [
+                    f"回退快照不可用：{as_of or '无历史行情'} 有效条目 {len(quotes)} "
+                    f"< {config.MIN_QUOTE_COUNT}"
+                ]
+            )
+        )
+
+    logger.warning(
+        "[DEBUG] 全部数据源失败，回退旧快照 | as_of=%s count=%s failures=%s",
+        as_of, len(quotes), "；".join(failures),
+    )
+    return FetchResult(
+        quotes=quotes,
+        source="cache",
+        count=len(quotes),
+        elapsed_ms=elapsed_ms,
+        failures=failures,
+        stale=True,
+        as_of=as_of,
+    )
+
+
 def fetch_market_snapshot(conn: sqlite3.Connection) -> FetchResult:
     sources = source_repo.list_sources(conn, only_enabled=True)
     if not sources:
+        # 全部停用是配置错误，不是网络故障；不能用旧快照掩盖，否则用户会误以为仍在抓取。
         raise MarketUnavailable("没有启用任何数据源")
 
+    started_all = time.perf_counter()
     universe = _universe(conn)
     failures: list[str] = []
 
@@ -95,7 +153,9 @@ def fetch_market_snapshot(conn: sqlite3.Connection) -> FetchResult:
                 source_repo.mark_failure(conn, name, message)
                 source_repo.log_health(conn, name, False, elapsed, message)
 
-    raise MarketUnavailable("; ".join(failures))
+    return _stale_snapshot(
+        conn, failures, int((time.perf_counter() - started_all) * 1000)
+    )
 
 
 def refresh_quotes(conn: sqlite3.Connection) -> FetchResult:
