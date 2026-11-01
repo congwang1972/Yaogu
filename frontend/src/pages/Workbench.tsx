@@ -14,6 +14,8 @@ export function Workbench() {
   const [rejected, setRejected] = useState<GateRow[]>([])
   const [tab, setTab] = useState<Tab>('candidates')
   const [starting, setStarting] = useState(false)
+  // 默认关闭：stock_themes 一期没有维护入口，开启后会把所有标的挡在题材阶段
+  const [withTheme, setWithTheme] = useState(false)
   const toast = useToast()
   const navigate = useNavigate()
 
@@ -74,7 +76,7 @@ export function Workbench() {
   const start = async () => {
     setStarting(true)
     try {
-      const { run_id } = await api.startRun({ scope: 'all', with_theme: true })
+      const { run_id } = await api.startRun({ scope: 'all', with_theme: withTheme })
       const next = await api.getRun(run_id)
       setRun(next)
       toast('已开始筛选，正在抓取行情…')
@@ -140,6 +142,19 @@ export function Workbench() {
     <>
       <div className="actionbar">
         <h1 className="page-title">选股工作台</h1>
+        <label
+          className="caption"
+          style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+          title="仅保留命中 2026 题材池的标的；需先在 stock_themes 维护关联，否则候选为 0"
+        >
+          <input
+            type="checkbox"
+            checked={withTheme}
+            onChange={(e) => setWithTheme(e.target.checked)}
+            disabled={starting || running}
+          />
+          仅看题材池
+        </label>
         <Button variant="primary" onClick={start} loading={starting || running}>
           {running ? '筛选中…' : '执行筛选'}
         </Button>
@@ -200,7 +215,11 @@ export function Workbench() {
             rowKey={(r) => r.code}
             loading={starting || running}
             onRowClick={(r) => navigate(`/stocks/${r.code}`)}
-            empty={run ? '当前条件下无候选，可在设置中放宽阈值' : '尚未执行筛选'}
+            empty={run
+              ? (withTheme
+                ? '当前仅看题材池，未命中题材的标的已被过滤；可取消勾选后重试'
+                : '当前条件下无候选，可在设置中放宽阈值')
+              : '尚未执行筛选'}
           />
         ) : (
           <DataTable

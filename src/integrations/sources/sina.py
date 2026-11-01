@@ -43,8 +43,7 @@ class SinaAdapter(SourceAdapter):
         query = ",".join(f"{market_prefix(c)}{c}" for c in codes)
         try:
             # 新浪要求带 Referer，否则返回 403
-            resp = client.get(URL + query, headers={"Referer": "https://finance.sina.com.cn"})
-            resp.raise_for_status()
+            resp = self._get(client, URL + query, headers={"Referer": "https://finance.sina.com.cn"})
             return resp.content.decode("gbk", errors="replace")
         except Exception as exc:
             raise SourceError(f"新浪源请求失败：{exc}") from exc

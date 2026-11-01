@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime
 
 from src.core.db import now_iso
@@ -23,7 +24,10 @@ LIST_URL = "https://push2.eastmoney.com/api/qt/clist/get"
 # 沪深主板 + 创业板 + 科创板 + 北交所
 MARKET_FILTER = "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
 FIELDS = "f2,f3,f4,f5,f6,f8,f12,f13,f14,f15,f16,f17,f18,f20,f21,f124"
-PAGE_SIZE = 6000
+# 2026-11 实测：接口无视 pz，固定每页 100 条（且会 302 到 push2delay）。
+# 不能再拿「返回条数 < 请求条数」判断末页，否则永远只抓第一页。
+PAGE_SIZE = 100
+MAX_PAGES = 200
 
 
 class EastmoneyAdapter(SourceAdapter):
@@ -33,7 +37,7 @@ class EastmoneyAdapter(SourceAdapter):
         quotes: list[Quote] = []
         page = 1
         with self._client() as client:
-            while True:
+            while page <= MAX_PAGES:
                 payload = self._request(client, page)
                 data = payload.get("data") or {}
                 diff = data.get("diff") or []
@@ -43,18 +47,40 @@ class EastmoneyAdapter(SourceAdapter):
                     break
                 quotes.extend(self._parse_row(row) for row in diff)
                 total = int(data.get("total") or 0)
-                if len(quotes) >= total or len(diff) < PAGE_SIZE:
+                # 以接口返回的 total 为准分页；total 缺失时靠下一页返回空数组收敛
+                if total and len(quotes) >= total:
                     break
                 page += 1
+            else:
+                raise SourceError(f"东方财富分页超过 {MAX_PAGES} 页仍未结束")
+
         if universe:
             wanted = set(universe)
             quotes = [q for q in quotes if q.code in wanted]
         return quotes
 
-    def _request(self, client, page: int) -> dict:
+    def test(self) -> tuple[bool, int | None, str | None]:
+        """探活只取 5 条：全量分页要 60 次请求，不能拿来做连接测试。"""
+        start = time.perf_counter()
+        try:
+            with self._client() as client:
+                payload = self._request(client, 1, page_size=5)
+            data = payload.get("data") or {}
+            diff = data.get("diff") or []
+            if isinstance(diff, dict):
+                diff = list(diff.values())
+            latency = int((time.perf_counter() - start) * 1000)
+            if not diff:
+                return False, latency, "返回空结果"
+            return True, latency, None
+        except Exception as exc:
+            latency = int((time.perf_counter() - start) * 1000)
+            return False, latency, str(exc)[:300]
+
+    def _request(self, client, page: int, page_size: int = PAGE_SIZE) -> dict:
         params = {
             "pn": page,
-            "pz": PAGE_SIZE,
+            "pz": page_size,
             "po": 1,
             "np": 1,
             "fltt": 2,
@@ -64,9 +90,7 @@ class EastmoneyAdapter(SourceAdapter):
             "fields": FIELDS,
         }
         try:
-            resp = client.get(LIST_URL, params=params)
-            resp.raise_for_status()
-            return resp.json()
+            return self._get(client, LIST_URL, params=params).json()
         except Exception as exc:
             raise SourceError(f"东方财富请求失败：{exc}") from exc
 

@@ -108,6 +108,47 @@ def test_universe_required_source_skipped_when_db_empty(conn, monkeypatch):
     assert adapter.calls == []
 
 
+class BootstrappingAdapter(FakeAdapter):
+    """模拟腾讯：自己拿代码全集后再批量抓行情。"""
+
+    def __init__(self, quotes=None, universe_codes=None, universe_error=None):
+        super().__init__(quotes, requires_universe=True)
+        self.universe_codes = universe_codes or []
+        self.universe_error = universe_error
+
+    def fetch_universe(self):
+        if self.universe_error:
+            raise self.universe_error
+        return self.universe_codes
+
+
+def test_batch_source_bootstraps_universe_when_db_empty(conn, monkeypatch):
+    enable_only_source(conn, "tencent")
+    adapter = use_adapter(
+        monkeypatch,
+        BootstrappingAdapter([make_quote()], universe_codes=["600001", "600002"]),
+    )
+
+    result = market_service.fetch_market_snapshot(conn)
+    assert result.source == "tencent"
+    assert adapter.calls == [["600001", "600002"]]
+    assert conn.execute("SELECT COUNT(*) AS c FROM stocks").fetchone()["c"] == 1
+
+
+def test_universe_bootstrap_failure_is_recorded(conn, monkeypatch):
+    enable_only_source(conn, "tencent")
+    use_adapter(
+        monkeypatch,
+        BootstrappingAdapter(universe_error=SourceError("榜单接口超时")),
+    )
+
+    with pytest.raises(market_service.MarketUnavailable, match="获取代码全集失败"):
+        market_service.fetch_market_snapshot(conn)
+
+    source = conn.execute("SELECT * FROM data_sources WHERE name = 'tencent'").fetchone()
+    assert "榜单接口超时" in source["last_error"]
+
+
 def test_universe_passed_to_batch_adapter(conn, monkeypatch, seed):
     seed("600001", quote=make_quote())
     enable_only_source(conn, "tencent")

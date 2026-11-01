@@ -47,8 +47,29 @@ def fetch_market_snapshot(conn: sqlite3.Connection) -> FetchResult:
         name = row["name"]
         adapter: SourceAdapter = get_adapter(name)
         if adapter.requires_universe and not universe:
-            failures.append(f"{name}: 缺少代码全集，需先用主源成功抓取一次")
-            continue
+            # 云机房常把主源（东财）挡掉，批量源若能自行取全集就能独立冷启动，
+            # 否则 stocks 永远为空，腾讯/新浪会互相等对方先成功。
+            fetcher = getattr(adapter, "fetch_universe", None)
+            if fetcher is None:
+                failures.append(f"{name}: 缺少代码全集，需先用主源成功抓取一次")
+                continue
+            started = time.perf_counter()
+            try:
+                universe = fetcher()
+                elapsed = int((time.perf_counter() - started) * 1000)
+                logger.info("[DEBUG] 代码全集获取成功 | source=%s count=%s elapsed=%sms", name, len(universe), elapsed)
+            except Exception as exc:
+                elapsed = int((time.perf_counter() - started) * 1000)
+                message = str(exc)[:300]
+                failures.append(f"{name}: 获取代码全集失败：{message}")
+                logger.warning("[DEBUG] 代码全集获取失败 | source=%s error=%s", name, message)
+                with transaction(conn):
+                    source_repo.mark_failure(conn, name, message)
+                    source_repo.log_health(conn, name, False, elapsed, message)
+                continue
+            if not universe:
+                failures.append(f"{name}: 代码全集为空")
+                continue
         started = time.perf_counter()
         try:
             quotes = adapter.fetch_all(universe if adapter.requires_universe else None)
