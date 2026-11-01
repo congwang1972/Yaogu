@@ -24,7 +24,6 @@ export default function App() {
   return (
     <ToastProvider>
       <Routes>
-        <Route path="/login" element={<Login onLogin={() => setAuthed(true)} />} />
         {authed ? (
           <Route element={<Layout onLogout={() => setAuthed(false)} />}>
             <Route path="/workbench" element={<Workbench />} />
@@ -35,7 +34,10 @@ export default function App() {
             <Route path="*" element={<Navigate to="/workbench" replace />} />
           </Route>
         ) : (
-          <Route path="*" element={<Navigate to="/login" replace />} />
+          <>
+            <Route path="/login" element={<Login onLogin={() => setAuthed(true)} />} />
+            <Route path="*" element={<Navigate to="/login" replace />} />
+          </>
         )}
       </Routes>
     </ToastProvider>
