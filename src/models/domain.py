@@ -95,3 +95,7 @@ class FetchResult:
     count: int
     elapsed_ms: int
     failures: list[str] = field(default_factory=list)
+    # 所有源都失败时回退最近一份快照；stale=True 表示这批数据不是本次抓取的，
+    # 调用方必须把 as_of 和降级原因透出给界面，不能当作当日行情使用。
+    stale: bool = False
+    as_of: str | None = None

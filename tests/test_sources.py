@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from src.integrations.sources import SOURCE_REGISTRY, get_adapter
-from src.integrations.sources.base import SourceAdapter, SourceError
+from src.integrations.sources.base import PROBE_UNIVERSE, SourceAdapter, SourceError
 from src.integrations.sources.eastmoney import EastmoneyAdapter
 from src.integrations.sources.sina import SinaAdapter
 from src.integrations.sources.tencent import TencentAdapter
@@ -56,7 +56,57 @@ def test_eastmoney_supports_dict_diff_and_universe_filter(monkeypatch):
     assert [q.code for q in quotes] == ["000002"]
 
 
+def test_eastmoney_paginates_until_total(monkeypatch):
+    """接口固定每页 100 条，必须按 total 翻页而不是按返回条数判断末页。"""
+    total = 250
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        page = int(request.url.params["pn"])
+        start = (page - 1) * 100
+        count = max(0, min(100, total - start))
+        diff = [em_row(f12=str(600000 + start + i)) for i in range(count)]
+        return httpx.Response(200, json={"data": {"total": total, "diff": diff}})
+
+    mock_client(handler, monkeypatch, EastmoneyAdapter)
+    quotes = EastmoneyAdapter().fetch_all()
+    assert len(quotes) == total
+    assert quotes[-1].code == "600249"
+
+
+def test_eastmoney_test_probes_one_small_page(monkeypatch):
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["pn"] = request.url.params["pn"]
+        seen["pz"] = request.url.params["pz"]
+        return httpx.Response(200, json={"data": {"total": 5926, "diff": [em_row()]}})
+
+    mock_client(handler, monkeypatch, EastmoneyAdapter)
+    ok, _, error = EastmoneyAdapter().test()
+    assert ok is True
+    assert error is None
+    assert seen == {"pn": "1", "pz": "5"}
+
+
+def test_eastmoney_retries_transient_5xx(monkeypatch):
+    monkeypatch.setattr("src.integrations.sources.base.time.sleep", lambda _: None)
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return httpx.Response(502, text="bad gateway")
+        return httpx.Response(200, json={"data": {"total": 1, "diff": [em_row()]}})
+
+    mock_client(handler, monkeypatch, EastmoneyAdapter)
+    quotes = EastmoneyAdapter().fetch_all()
+    assert calls["n"] == 3
+    assert len(quotes) == 1
+
+
 def test_eastmoney_request_error_becomes_source_error(monkeypatch):
+    monkeypatch.setattr("src.integrations.sources.base.time.sleep", lambda _: None)
+
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="boom")
 
@@ -101,6 +151,23 @@ def test_tencent_parses_limit_up_and_mv(monkeypatch):
 def test_tencent_requires_universe():
     with pytest.raises(SourceError):
         TencentAdapter().fetch_all([])
+
+
+def test_tencent_fetches_universe_by_paging(monkeypatch):
+    total = 250
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "getBoardRankList" in str(request.url)
+        offset = int(request.url.params["offset"])
+        count = max(0, min(200, total - offset))
+        rows = [{"code": f"sh{600001 + offset + i}"} for i in range(count)]
+        return httpx.Response(200, json={"code": 0, "data": {"total": total, "rank_list": rows}})
+
+    mock_client(handler, monkeypatch, TencentAdapter)
+    codes = TencentAdapter().fetch_universe()
+    assert len(codes) == total
+    assert codes[0] == "600001"
+    assert codes[-1] == "600250"
 
 
 def test_tencent_incomplete_response_raises(monkeypatch):
@@ -187,6 +254,31 @@ def test_adapter_test_requires_enough_quotes(db_path, monkeypatch):
     ok, _, error = _GoodAdapter().test()
     assert ok is False
     assert "过少" in (error or "")
+
+
+def test_batch_adapter_test_probes_single_code(db_path, monkeypatch):
+    """批量源测连只取一只探针，不能被全市场最小条目数误判。"""
+    from src.core import config
+
+    monkeypatch.setattr(config, "MIN_QUOTE_COUNT", 10)
+
+    class _BatchAdapter(SourceAdapter):
+        name = "batch"
+        requires_universe = True
+
+        def __init__(self):
+            super().__init__()
+            self.universes = []
+
+        def fetch_all(self, universe=None):
+            self.universes.append(universe)
+            return [Quote(code="600000", name="浦发银行", trade_date="2026-10-30", close=10.0)]
+
+    adapter = _BatchAdapter()
+    ok, _, error = adapter.test()
+    assert ok is True
+    assert error is None
+    assert adapter.universes == [PROBE_UNIVERSE]
 
 
 def test_registry():

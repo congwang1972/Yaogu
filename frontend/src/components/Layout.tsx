@@ -58,6 +58,12 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
           <button className="btn-ghost" onClick={logout}>退出</button>
         </div>
       </header>
+      {status?.market.degraded && (
+        <div className="notice notice-error" style={{ marginTop: 12 }} role="alert">
+          ⚠ 行情降级：{status.market.degraded_reason ?? `最近数据为 ${status.market.latest_trade_date ?? '—'} 快照`}
+          。请先恢复数据源，再用最新行情重跑筛选。
+        </div>
+      )}
       <main style={{ paddingTop: 8 }}>
         <Outlet />
       </main>

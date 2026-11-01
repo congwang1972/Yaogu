@@ -45,6 +45,8 @@ def test_success_persists_stocks_quotes_and_health(conn, monkeypatch):
     assert result.source == "eastmoney"
     assert result.count == 1
     assert result.failures == []
+    assert result.stale is False
+    assert result.as_of is None
     assert conn.execute("SELECT COUNT(*) AS c FROM stocks").fetchone()["c"] == 1
     assert conn.execute("SELECT COUNT(*) AS c FROM daily_quotes").fetchone()["c"] == 1
     health = conn.execute("SELECT * FROM source_health_logs ORDER BY id DESC LIMIT 1").fetchone()
@@ -108,6 +110,47 @@ def test_universe_required_source_skipped_when_db_empty(conn, monkeypatch):
     assert adapter.calls == []
 
 
+class BootstrappingAdapter(FakeAdapter):
+    """模拟腾讯：自己拿代码全集后再批量抓行情。"""
+
+    def __init__(self, quotes=None, universe_codes=None, universe_error=None):
+        super().__init__(quotes, requires_universe=True)
+        self.universe_codes = universe_codes or []
+        self.universe_error = universe_error
+
+    def fetch_universe(self):
+        if self.universe_error:
+            raise self.universe_error
+        return self.universe_codes
+
+
+def test_batch_source_bootstraps_universe_when_db_empty(conn, monkeypatch):
+    enable_only_source(conn, "tencent")
+    adapter = use_adapter(
+        monkeypatch,
+        BootstrappingAdapter([make_quote()], universe_codes=["600001", "600002"]),
+    )
+
+    result = market_service.fetch_market_snapshot(conn)
+    assert result.source == "tencent"
+    assert adapter.calls == [["600001", "600002"]]
+    assert conn.execute("SELECT COUNT(*) AS c FROM stocks").fetchone()["c"] == 1
+
+
+def test_universe_bootstrap_failure_is_recorded(conn, monkeypatch):
+    enable_only_source(conn, "tencent")
+    use_adapter(
+        monkeypatch,
+        BootstrappingAdapter(universe_error=SourceError("榜单接口超时")),
+    )
+
+    with pytest.raises(market_service.MarketUnavailable, match="获取代码全集失败"):
+        market_service.fetch_market_snapshot(conn)
+
+    source = conn.execute("SELECT * FROM data_sources WHERE name = 'tencent'").fetchone()
+    assert "榜单接口超时" in source["last_error"]
+
+
 def test_universe_passed_to_batch_adapter(conn, monkeypatch, seed):
     seed("600001", quote=make_quote())
     enable_only_source(conn, "tencent")
@@ -118,6 +161,41 @@ def test_universe_passed_to_batch_adapter(conn, monkeypatch, seed):
 
     market_service.fetch_market_snapshot(conn)
     assert adapter.calls == [["600001"]]
+
+
+def test_all_sources_failed_falls_back_to_latest_snapshot(conn, seed, monkeypatch):
+    """源全挂时不能把批次直接判死：回退上一份完整快照，并标记 stale。"""
+    seed("600001", quote=make_quote())
+    enable_only_source(conn, "tencent")
+    use_adapter(monkeypatch, FakeAdapter(error=SourceError("超时")))
+
+    result = market_service.fetch_market_snapshot(conn)
+
+    assert result.source == "cache"
+    assert result.stale is True
+    assert result.as_of == "2026-10-30"
+    assert result.count == 1
+    assert result.quotes[0].code == "600001"
+    assert result.quotes[0].name == "测试股份"
+    assert result.failures == ["tencent: 超时"]
+    # 回退只读旧数据，不能把旧快照重新写一遍或覆盖原记录
+    assert conn.execute("SELECT COUNT(*) AS c FROM daily_quotes").fetchone()["c"] == 1
+    # 失败必须留痕，不能因为回退成功就把源标成健康
+    source = conn.execute("SELECT * FROM data_sources WHERE name = 'tencent'").fetchone()
+    assert source["last_error"] == "超时"
+    assert source["last_success_at"] is None
+    health = conn.execute("SELECT * FROM source_health_logs ORDER BY id DESC LIMIT 1").fetchone()
+    assert health["ok"] == 0
+
+
+def test_stale_snapshot_below_min_count_raises(conn, seed, monkeypatch):
+    seed("600001", quote=make_quote())
+    enable_only_source(conn, "tencent")
+    use_adapter(monkeypatch, FakeAdapter(error=SourceError("超时")))
+    monkeypatch.setattr(config, "MIN_QUOTE_COUNT", 2)
+
+    with pytest.raises(market_service.MarketUnavailable, match="回退快照"):
+        market_service.fetch_market_snapshot(conn)
 
 
 def test_refresh_quotes_delegates(conn, monkeypatch):

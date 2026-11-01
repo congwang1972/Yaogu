@@ -66,6 +66,7 @@ export function DataSources() {
 
       <div className="notice" style={{ marginBottom: 16 }}>
         ⚠ 已知部分免费接口会屏蔽腾讯云服务器 IP。部署后若某源持续失败，请先测试再决定是否停用。
+        所有源都失败时会回退最近一份快照，并在工作台标记「行情降级」。
       </div>
 
       {loading ? (

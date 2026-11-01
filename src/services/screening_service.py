@@ -65,7 +65,8 @@ def execute_run(
     passed_hard = 0
     pending_rows: list[tuple] = []
     stats = {"total": total, "processed": 0, "passed_hard": 0, "source": fetch.source,
-             "failures": fetch.failures, "elapsed_ms": 0}
+             "failures": fetch.failures, "elapsed_ms": 0,
+             "stale": fetch.stale, "as_of": fetch.as_of}
 
     try:
         for idx, quote in enumerate(quotes, start=1):
@@ -121,12 +122,12 @@ def execute_run(
         candidates=screening_repo.candidate_count(conn, run_id),
         elapsed_ms=int((time.perf_counter() - started) * 1000),
     )
-    status = "partial" if fetch.failures else "success"
+    status = "partial" if (fetch.failures or fetch.stale) else "success"
     with transaction(conn):
         screening_repo.finish_run(conn, run_id, status, stats)
     logger.info(
-        "[DEBUG] execute_run 完成 | run_id=%s total=%s passed=%s status=%s elapsed=%sms",
-        run_id, total, passed_hard, status, stats["elapsed_ms"],
+        "[DEBUG] execute_run 完成 | run_id=%s total=%s passed=%s status=%s stale=%s as_of=%s elapsed=%sms",
+        run_id, total, passed_hard, status, fetch.stale, fetch.as_of, stats["elapsed_ms"],
     )
 
 

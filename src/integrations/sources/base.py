@@ -16,6 +16,9 @@ from src.core.db import now_iso
 from src.models.domain import Quote
 
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
+# 测连用的探针代码。批量源没有代码全集时也要能验证网络与报文格式，
+# 不能用全市场抓取（既慢又会被 MIN_QUOTE_COUNT 误判为失败）。
+PROBE_UNIVERSE = ["600000"]
 
 
 class SourceError(Exception):
@@ -108,12 +111,45 @@ class SourceAdapter(ABC):
             follow_redirects=True,
         )
 
+    def _get(self, client: httpx.Client, url: str, **kwargs) -> httpx.Response:
+        """带重试的 GET：只重试网络错误与 5xx，4xx 立即失败。
+
+        免费源在云机房边缘节点上会偶发 502；不重试就会把「一次抖动」
+        记成整源不可用，进而错误地降级或跳过当天数据。
+        """
+        attempts = max(1, config.HTTP_MAX_RETRIES + 1)
+        last_exc: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                resp = client.get(url, **kwargs)
+                if resp.status_code >= 500:
+                    raise SourceError(f"HTTP {resp.status_code}")
+                resp.raise_for_status()
+                return resp
+            except (httpx.TransportError, httpx.HTTPStatusError, SourceError) as exc:
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 500:
+                    raise
+                last_exc = exc
+                if attempt < attempts - 1:
+                    time.sleep(0.5 * (attempt + 1))
+        assert last_exc is not None
+        raise last_exc
+
+    def fetch_universe(self) -> list[str]:
+        """批量源可自行获取代码全集；不支持的源显式失败，由调用方降级。"""
+        raise SourceError(f"{self.name} 不支持获取代码全集")
+
     def test(self) -> tuple[bool, int | None, str | None]:
         start = time.perf_counter()
         try:
-            quotes = self.fetch_all()
+            # 批量源用单只探针验证连通性与报文，不依赖数据库里是否已有全集
+            universe = PROBE_UNIVERSE if self.requires_universe else None
+            quotes = self.fetch_all(universe)
             latency = int((time.perf_counter() - start) * 1000)
-            if len(quotes) < config.MIN_QUOTE_COUNT:
+            if not quotes:
+                return False, latency, "返回空结果"
+            # 只有全市场抓取才用最小条目数兜底；探针本来就只有一条
+            if universe is None and len(quotes) < config.MIN_QUOTE_COUNT:
                 return False, latency, f"返回条目过少：{len(quotes)}"
             return True, latency, None
         except Exception as exc:  # 探测接口不抛异常，把失败原因返回给前端

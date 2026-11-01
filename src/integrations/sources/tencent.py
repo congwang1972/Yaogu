@@ -20,6 +20,9 @@ from src.models.domain import Quote
 
 BATCH_SIZE = 800
 URL = "https://qt.gtimg.cn/q="
+# 代码全集接口。东财被云 IP 屏蔽时，腾讯可独立完成冷启动，不再卡在「缺代码全集」。
+RANK_URL = "https://proxy.finance.qq.com/cgi/cgi-bin/rank/hs/getBoardRankList"
+RANK_PAGE = 200
 
 
 class TencentAdapter(SourceAdapter):
@@ -39,11 +42,50 @@ class TencentAdapter(SourceAdapter):
             raise SourceError(f"腾讯源返回不完整：{len(quotes)}/{len(universe)}")
         return quotes
 
+    def fetch_universe(self) -> list[str]:
+        """用腾讯涨幅榜翻页拿到 A 股代码全集（约 4600 只）。"""
+        codes: list[str] = []
+        seen: set[str] = set()
+        offset = 0
+        with self._client() as client:
+            while True:
+                try:
+                    payload = self._get(
+                        client,
+                        RANK_URL,
+                        params={
+                            "board_code": "aStock",
+                            "sort_type": "price",
+                            "direct": "down",
+                            "offset": offset,
+                            "count": RANK_PAGE,
+                        },
+                    ).json()
+                except Exception as exc:
+                    raise SourceError(f"腾讯源获取代码全集失败：{exc}") from exc
+                if payload.get("code") != 0:
+                    raise SourceError(f"腾讯源代码全集返回异常：{payload.get('msg') or payload.get('code')}")
+                data = payload.get("data") or {}
+                rows = data.get("rank_list") or []
+                if not rows:
+                    break
+                for row in rows:
+                    code = normalize_code(str(row.get("code") or ""))
+                    if code and code not in seen:
+                        seen.add(code)
+                        codes.append(code)
+                offset += len(rows)
+                total = int(data.get("total") or 0)
+                if total and offset >= total:
+                    break
+        if not codes:
+            raise SourceError("腾讯源代码全集为空")
+        return codes
+
     def _request(self, client, codes: list[str]) -> str:
         query = ",".join(f"{market_prefix(c)}{c}" for c in codes)
         try:
-            resp = client.get(URL + query)
-            resp.raise_for_status()
+            resp = self._get(client, URL + query)
             return resp.content.decode("gbk", errors="replace")
         except Exception as exc:
             raise SourceError(f"腾讯源请求失败：{exc}") from exc

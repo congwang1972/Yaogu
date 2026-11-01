@@ -6,8 +6,8 @@ A 股短线「妖股」筛选与跟踪工作台。抓取公开行情快照 → �
 ![Python](https://img.shields.io/badge/Python-3.13%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)
 ![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
-![Tests](https://img.shields.io/badge/tests-159%20passed-brightgreen)
-![Coverage](https://img.shields.io/badge/coverage-94.55%25-brightgreen)
+![Tests](https://img.shields.io/badge/tests-172%20passed-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-94.09%25-brightgreen)
 
 > **合规声明**：本工具仅做历史规律复盘，不构成任何投资建议。筛选结论均带数据来源与抓取时间。
 
@@ -34,6 +34,7 @@ A 股短线「妖股」筛选与跟踪工作台。抓取公开行情快照 → �
 一期已交付：
 
 - **三源级联抓取**：东方财富 / 腾讯 / 新浪，失败自动降级并记录健康流水
+- **行情失效兜底**：所有源都失败时回退最近一份完整快照，批次标记 `stale` 并在顶栏 / 工作台显式提示「行情降级」；定时任务不会用旧快照自动产出新结论
 - **硬门槛筛选**：总市值 20–45 亿、收盘价 3–10 元、非 ST / 非停牌，流通市值门槛可选
 - **题材与形态**：题材匹配、首板 / 一字 / 换手形态识别、规则加减分与逐项明细
 - **观察池**：容量与阶段目标、状态机（保留 / 观察 / 淘汰）、变更理由强制留痕、软移出
@@ -106,7 +107,7 @@ cd frontend && npm run build
 python -m pytest
 ```
 
-基线：**159 passed，覆盖率 94.55%**（门禁 80%，配置在 `pytest.ini`）。测试不访问真实行情接口：适配器用 `httpx.MockTransport` 固定报文，筛选用固定 `FetchResult` 快照。
+基线：**172 passed，覆盖率 94.09%**（门禁 80%，配置在 `pytest.ini`）。测试不访问真实行情接口：适配器用 `httpx.MockTransport` 固定报文，筛选用固定 `FetchResult` 快照。
 
 ## 技术栈
 
@@ -179,7 +180,7 @@ src/
 | GET | `/auth/me` | 当前会话 |
 | POST | `/auth/password` | 修改密码（旧会话立即失效） |
 | GET | `/health` | 健康探针（免登录） |
-| GET | `/system/status` | 顶栏状态：数据源、最近批次、最近任务、池统计 |
+| GET | `/system/status` | 顶栏状态：数据源、最近批次、最近任务、行情快照日期与降级标记、池统计 |
 | POST | `/screening/runs` | 启动筛选（202，后台执行） |
 | GET | `/screening/runs` | 批次列表（分页） |
 | GET | `/screening/runs/{id}` | 批次详情与进度 |
@@ -210,7 +211,7 @@ src/
 ## 页面清单
 
 - [x] **登录页 `/login`**：密码登录、错误提示、合规声明
-- [x] **选股工作台 `/workbench`**：执行筛选、进度轮询、候选池 / 落选明细切换、加入观察池、批次导出、失败 / 部分失败提示、二期门槛人工核对提醒
+- [x] **选股工作台 `/workbench`**：执行筛选、进度轮询、候选池 / 落选明细切换、加入观察池、批次导出、失败 / 部分失败 / 旧快照降级提示、二期门槛人工核对提醒
 - [x] **观察池 `/pool`**：容量进度、状态计数、全部 / 保留 / 观察 / 淘汰筛选、状态变更弹窗（理由必填 + 常用理由）、导出
 - [x] **个股详情 `/stocks/:code`**：核心指标、K 线 + 换手率图、门槛与形态判定、评分明细、人工补录表单与最近记录、观察池变更时间线
 - [x] **数据源 `/sources`**：三源卡片、启停、实时测试、最近健康与错误、腾讯云 IP 屏蔽提示
@@ -247,7 +248,7 @@ Yaogu/
 │   ├── index.html
 │   ├── package.json
 │   └── vite.config.ts
-├── tests/                      # 9 个测试文件 + conftest 夹具
+├── tests/                      # 13 个测试文件 + conftest 夹具
 ├── scripts/run.sh
 ├── .env.example
 ├── requirements.txt
@@ -259,8 +260,19 @@ Yaogu/
 ## 运维与已知限制
 
 - **腾讯云 IP 屏蔽**：部分免费接口会屏蔽云服务器出口 IP。部署后先在「数据源」页逐个测试；若主源长期失败，可改用收费源适配器（新增实现并注册到 `SOURCE_REGISTRY`）。
+  - 2026-11-01 实测腾讯云出口：东方财富 `push2.eastmoney.com` 持续 502，新浪 `hq.sinajs.cn` 返回 403，腾讯 `qt.gtimg.cn` 正常。
+  - 腾讯适配器会用涨幅榜接口（`getBoardRankList`）自行获取约 4600 只 A 股代码，因此东财不可用时仍可独立冷启动，不再卡在「缺少代码全集」。
+  - 东财长期不可用可在「数据源健康」停用它，但**不要停用腾讯**——它当前是云机房唯一可用的行情源。
+  - 「测试连接」对批量源只取一只探针（`600000`），不会触发全市场抓取；东财只取 5 条。
+- **行情失效兜底**：所有启用源都失败时，`fetch_market_snapshot` 回退 `daily_quotes` 最近一个交易日的完整快照（条目数仍需满足 `MIN_QUOTE_COUNT`）。
+  - 手动筛选仍可执行，但批次状态为 `partial`、`stats.stale=true`，顶栏和工作台显示「行情降级 · 使用 YYYY-MM-DD 旧快照」；候选和导出都基于旧数据，不能当作当日结论。
+  - 每日定时任务发现旧快照后**不会自动发起筛选**，只写一条 `job_runs.status=partial`，等待人工恢复数据源后重跑。
+  - 没有历史快照、或快照条目不足时仍抛 `MarketUnavailable`，批次直接失败。
 - **一期不做**：机构持仓 <5%、解禁 / 减持 / 监管事件两条门槛（免费源不可得），界面永久提示人工核对；港股、形态深度分析、龙虎榜为二期。
-- **题材池**：一期由种子数据维护，不支持页面编辑。
+- **题材池**：一期由种子数据维护，不支持页面编辑；`stock_themes`（个股-题材关联）默认无数据。
+  - `with_theme=true` 时所有股票都会在题材阶段被淘汰，候选为 0。
+  - 工作台已提供「仅看题材池」勾选框，**默认关闭**；补好 `stock_themes` 后再勾选即可按题材过滤。
+  - 也可直接调 API `POST /api/v1/screening/runs`，传 `{"scope":"all","with_theme":false}`。
 - **单进程调度**：APScheduler 运行在应用进程内。多 worker 部署时须只在一个进程启用调度，或迁移到外部任务队列。
 - **同步实现偏差**：HLD 原计划 `async` 适配器 + `pytest-asyncio`；实际采用同步 httpx / sqlite + FastAPI 线程池（`def` 端点），避免 sqlite 同步调用与事件循环混用。契约与分层不变。
 

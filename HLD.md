@@ -417,7 +417,7 @@ CREATE TABLE job_runs (
 | GET | `/export/watch-pool.csv` | 观察池导出 |
 | GET | `/export/screening/{run_id}.csv` | 筛选结果导出 |
 | GET | `/health` | 存活探针（免认证） |
-| GET | `/system/status` | 上次筛选、源摘要、阶段（顶栏用） |
+| GET | `/system/status` | 上次筛选、源摘要、行情快照日期 / 降级标记、阶段（顶栏用） |
 
 ### 5.3 外部接口设计
 
@@ -462,10 +462,14 @@ market_service.fetch_market_snapshot()
        else: 校验条目数 > 1000 才接受；break
   3. 归一化二次校验（市值范围、字段非空率）
   4. 批量 upsert stocks + daily_quotes（executemany，单事务）
-  5. 返回 FetchResult{source, count, elapsed_ms, warnings}
+  5. 返回 FetchResult{source, count, elapsed_ms, failures, stale, as_of}
 ```
 
-**失败判定**：全部源失败 → 抛出 `MarketUnavailable`，筛选批次标记 `failed`，保留上次快照并在 UI 提示。
+**失败判定**：
+
+- 全部源失败但存在最近一份完整快照 → 只读回退该快照，返回 `stale=True` / `source="cache"` / `as_of=交易日`；批次状态 `partial`，顶栏与工作台显示「行情降级」。
+- 全部源失败且无历史快照、或快照条目不足 → 抛出 `MarketUnavailable`，筛选批次标记 `failed`。
+- 每日定时任务遇到 `stale` 只写 `job_runs.status=partial`，不自动发起筛选，避免用旧行情产出新结论。
 
 ### 6.2 硬门槛模块
 
