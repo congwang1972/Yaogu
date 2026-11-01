@@ -1,0 +1,47 @@
+/* 设计 Token —— 与 DESIGN_SPEC.md §2/§4 一一对应 */
+:root {
+  --bg-canvas: #0b0e13;
+  --bg-surface-1: #11151c;
+  --bg-surface-2: #161b24;
+  --bg-surface-3: #1b212b;
+  --bg-hover: #1a2029;
+  --bg-selected: rgba(76, 141, 255, 0.14);
+
+  --border-subtle: #252c38;
+  --border-strong: #323b4a;
+
+  --brand: #d84a3c;
+  --brand-hover: #e55f51;
+  --brand-active: #b93a2e;
+  --accent: #4c8dff;
+  --accent-soft: rgba(76, 141, 255, 0.14);
+
+  --price-up: #ff4d4f;
+  --price-down: #16c784;
+  --price-flat: #8a94a6;
+
+  --status-keep: #4c8dff;
+  --status-watch: #f5a524;
+  --status-drop: #6b7280;
+
+  --feedback-warn: #f5a524;
+  --feedback-error: #e05348;
+
+  --text-primary: #e6e8eb;
+  --text-secondary: #9aa3ae;
+  --text-tertiary: #6b7280;
+
+  --font-ui: Inter, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-num: 'JetBrains Mono', 'SFMono-Regular', Consolas, monospace;
+
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+}
