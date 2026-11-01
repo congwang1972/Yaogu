@@ -1,51 +1,130 @@
-# 项目交付说明书 - 妖股选股系统
-
-## 1. 项目概述
+# 妖股选股系统
 
 A 股短线「妖股」筛选与跟踪工作台。抓取公开行情快照 → 硬门槛淘汰 → 题材匹配 → 形态判定 → 规则评分 → 建立观察池 → 持续跟踪与留痕淘汰。
 
-一期已交付：
-
-- 东方财富 / 腾讯 / 新浪三源级联抓取，失败自动降级并记录健康流水
-- 硬门槛筛选（总市值 20–45 亿、收盘价 3–10 元、非 ST / 非停牌，流通市值门槛可选）
-- 题材匹配、首板 / 一字 / 换手形态识别、规则加减分与逐项明细
-- 观察池容量与阶段目标、状态机（保留 / 观察 / 淘汰）、变更理由强制留痕、软移出
-- 人工补录（30 日涨幅、200 日新高、换手历史、名称辨识度、年末催化）与 CSV 导入
-- 筛选结果与观察池 CSV 导出（UTF-8 BOM，Excel 直接打开）
-- 单用户密码登录、登录锁定、改密后旧会话自动失效
-- 每日 15:30 自动刷新 + 每周数据源健康检查
-- 6 个前端页面（登录、工作台、观察池、个股详情、数据源、设置），暗色「暗夜作战台」
+[![CI](https://github.com/congwang1972/Yaogu/actions/workflows/ci.yml/badge.svg)](https://github.com/congwang1972/Yaogu/actions/workflows/ci.yml)
+![Python](https://img.shields.io/badge/Python-3.13%2B-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.110%2B-009688?logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)
+![Tests](https://img.shields.io/badge/tests-159%20passed-brightgreen)
+![Coverage](https://img.shields.io/badge/coverage-94.55%25-brightgreen)
 
 > **合规声明**：本工具仅做历史规律复盘，不构成任何投资建议。筛选结论均带数据来源与抓取时间。
 
-## 2. 后端技术栈
+<!-- 截图占位：补充界面截图后取消注释
+<p align="center"><img src="docs/screenshot-workbench.png" width="820" alt="选股工作台"></p>
+-->
 
-- Python 3.14 + FastAPI 0.162 + Pydantic v2
+## 目录
+
+- [核心特性](#核心特性)
+- [快速开始](#快速开始)
+- [技术栈](#技术栈)
+- [架构与关键设计](#架构与关键设计)
+- [数据模型](#数据模型)
+- [API 一览](#api-一览)
+- [页面清单](#页面清单)
+- [项目结构](#项目结构)
+- [运维与已知限制](#运维与已知限制)
+- [合规](#合规)
+- [文档索引](#文档索引)
+
+## 核心特性
+
+一期已交付：
+
+- **三源级联抓取**：东方财富 / 腾讯 / 新浪，失败自动降级并记录健康流水
+- **硬门槛筛选**：总市值 20–45 亿、收盘价 3–10 元、非 ST / 非停牌，流通市值门槛可选
+- **题材与形态**：题材匹配、首板 / 一字 / 换手形态识别、规则加减分与逐项明细
+- **观察池**：容量与阶段目标、状态机（保留 / 观察 / 淘汰）、变更理由强制留痕、软移出
+- **人工补录**：30 日涨幅、200 日新高、换手历史、名称辨识度、年末催化，支持 CSV 导入
+- **数据导出**：筛选结果与观察池 CSV（UTF-8 BOM，Excel 直接打开）
+- **认证**：单用户密码登录、登录锁定、改密后旧会话自动失效
+- **定时任务**：每日 15:30 自动刷新 + 每周数据源健康检查
+- **前端 6 个页面**：登录、工作台、观察池、个股详情、数据源、设置，暗色「暗夜作战台」
+
+## 快速开始
+
+### 1. 准备环境变量
+
+```bash
+cp .env.example .env
+```
+
+至少修改 `APP_SECRET` 与 `INITIAL_PASSWORD`。
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `APP_SECRET` | 空 | 会话签名密钥；为空时每次启动随机生成（重启后需重新登录） |
+| `INITIAL_PASSWORD` | 空 | 首次建库的登录密码；为空则随机生成并打印到日志 |
+| `DB_PATH` | `data/yaogu.db` | sqlite 文件路径 |
+| `DATA_DIR` | `./data` | 数据目录 |
+| `COOKIE_SECURE` | `0` | HTTPS 部署时置 `1` |
+| `LOGIN_MAX_ATTEMPTS` | `5` | 连续失败锁定次数 |
+| `LOGIN_LOCK_SECONDS` | `300` | 锁定秒数 |
+| `HTTP_TIMEOUT_SECONDS` | `10` | 抓取超时 |
+| `HTTP_MAX_RETRIES` | `2` | 预留重试次数 |
+| `DAILY_REFRESH_TIME` | `15:30` | 每日刷新时间 |
+| `SCHEDULER_ENABLED` | `1` | 是否启用进程内定时任务 |
+| `MIN_QUOTE_COUNT` | `1000` | 有效行情条目下限，低于即判该源失败 |
+
+### 2. 启动后端
+
+```bash
+python -m venv venv
+# Windows: venv\Scripts\activate    Linux/macOS: source venv/bin/activate
+pip install -r requirements.txt
+
+python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --env-file .env
+```
+
+首次启动会建库、写入 22 个题材种子、3 个数据源与默认阈值；若未配置 `INITIAL_PASSWORD`，随机密码只打印一次到日志。
+
+API 文档：<http://127.0.0.1:8000/docs>
+
+### 3. 启动前端开发服务器
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Vite 已把 `/api` 代理到 `127.0.0.1:8000`，访问 <http://127.0.0.1:5173>。
+
+### 4. 生产构建
+
+```bash
+cd frontend && npm run build
+```
+
+构建产物在 `frontend/dist`。后端启动时会自动托管该目录，并支持前端路由刷新（`/pool` 等不会 404）。也可由 Nginx 托管静态资源、反向代理 `/api` 到 uvicorn。
+
+### 5. 运行测试
+
+```bash
+python -m pytest
+```
+
+基线：**159 passed，覆盖率 94.55%**（门禁 80%，配置在 `pytest.ini`）。测试不访问真实行情接口：适配器用 `httpx.MockTransport` 固定报文，筛选用固定 `FetchResult` 快照。
+
+## 技术栈
+
+**后端**
+
+- Python 3.13+ / FastAPI 0.162 / Pydantic v2
 - sqlite3（标准库，WAL 模式，`PRAGMA user_version` 迁移，不引 ORM）
 - httpx 同步客户端 + APScheduler 后台调度
 - pytest + pytest-cov，覆盖率门禁 80%
 
-### 2.1 数据库表结构（15 张）
+**前端**
 
-| 表 | 用途 |
-| --- | --- |
-| `users` | 单用户密码哈希 |
-| `settings` | 阈值 / 评分 / 观察池 / 定时任务配置（JSON） |
-| `data_sources` | 数据源启停、优先级、最近成功 / 失败 |
-| `source_health_logs` | 每次抓取或探测的健康流水 |
-| `stocks` | 股票基础信息（代码、名称、市场、ST、交易状态） |
-| `daily_quotes` | 日行情快照（市值统一亿元，主键 code + trade_date） |
-| `themes` | 2026 跨年题材池（主线 / 支线 / 储备） |
-| `stock_themes` | 股票-题材关联 |
-| `screening_runs` | 筛选批次（参数、状态、进度、耗时） |
-| `screening_results` | 每条门槛 / 题材 / 形态判定，含实测值、阈值、理由 |
-| `scores` | 评分总分与逐项明细 JSON |
-| `watch_pool` | 观察池记录（容量、题材方向、首板日期、梯队） |
-| `watch_pool_history` | 状态变更留痕，reason 非空由 CHECK 约束兜底 |
-| `manual_metrics` | 人工补录指标（code + trade_date + metric 唯一） |
-| `job_runs` | 定时任务执行记录 |
+- 结构层：HTML5 语义化标签，React 18 + TypeScript
+- 样式层：CSS3（Grid / Flexbox）+ Bootstrap 5.3 暗色主题 + 设计 Token
+- 逻辑层：TypeScript（ES2020+）、Vite 5 构建、react-router-dom 6、ECharts 5
+- 视觉规范见 `DESIGN_SPEC.md`；主色 `#D84A3C` 仅用于 CTA，涨跌用红绿 + 符号双编码，状态色不复用红绿
 
-### 2.2 后端架构
+## 架构与关键设计
 
 ```text
 src/
@@ -67,7 +146,29 @@ src/
 - **抓取保险丝**：有效条目少于 `MIN_QUOTE_COUNT` 视为整源失败，避免空快照覆盖旧数据。
 - **人工补录优先最新日期**：每项指标取最新一条计入评分。
 
-### 2.3 API 接口列表
+## 数据模型
+
+15 张表：
+
+| 表 | 用途 |
+| --- | --- |
+| `users` | 单用户密码哈希 |
+| `settings` | 阈值 / 评分 / 观察池 / 定时任务配置（JSON） |
+| `data_sources` | 数据源启停、优先级、最近成功 / 失败 |
+| `source_health_logs` | 每次抓取或探测的健康流水 |
+| `stocks` | 股票基础信息（代码、名称、市场、ST、交易状态） |
+| `daily_quotes` | 日行情快照（市值统一亿元，主键 code + trade_date） |
+| `themes` | 2026 跨年题材池（主线 / 支线 / 储备） |
+| `stock_themes` | 股票-题材关联 |
+| `screening_runs` | 筛选批次（参数、状态、进度、耗时） |
+| `screening_results` | 每条门槛 / 题材 / 形态判定，含实测值、阈值、理由 |
+| `scores` | 评分总分与逐项明细 JSON |
+| `watch_pool` | 观察池记录（容量、题材方向、首板日期、梯队） |
+| `watch_pool_history` | 状态变更留痕，reason 非空由 CHECK 约束兜底 |
+| `manual_metrics` | 人工补录指标（code + trade_date + metric 唯一） |
+| `job_runs` | 定时任务执行记录 |
+
+## API 一览
 
 统一前缀 `/api/v1`，JSON；错误统一为 `{"error": {"code", "message", "detail"}}`。
 
@@ -106,14 +207,7 @@ src/
 | GET | `/export/watch-pool.csv` | 观察池导出 |
 | GET | `/export/screening/{run_id}.csv` | 筛选结果导出 |
 
-## 3. 前端技术栈
-
-- **结构层**：HTML5 语义化标签，React 18 + TypeScript
-- **样式层**：CSS3（Grid / Flexbox）+ Bootstrap 5.3 暗色主题 + 设计 Token
-- **逻辑层**：TypeScript（ES2020+）、Vite 5 构建、react-router-dom 6、ECharts 5
-- 视觉规范：`DESIGN_SPEC.md`；主色 `#D84A3C` 仅用于 CTA，涨跌用红绿 + 符号双编码，状态色不复用红绿
-
-## 4. 交付页面与功能清单
+## 页面清单
 
 - [x] **登录页 `/login`**：密码登录、错误提示、合规声明
 - [x] **选股工作台 `/workbench`**：执行筛选、进度轮询、候选池 / 落选明细切换、加入观察池、批次导出、失败 / 部分失败提示、二期门槛人工核对提醒
@@ -122,10 +216,11 @@ src/
 - [x] **数据源 `/sources`**：三源卡片、启停、实时测试、最近健康与错误、腾讯云 IP 屏蔽提示
 - [x] **设置 `/settings`**：硬门槛阈值、评分基准分与逐项分值 / 权重、池容量与阶段目标、定时任务、修改密码
 
-## 5. 项目文件结构
+## 项目结构
 
 ```text
 Yaogu/
+├── .github/workflows/ci.yml    # CI：pytest + 覆盖率门禁、前端构建
 ├── .claude/prompts/            # 产品 / 设计 / 开发 / 测试 / 协调者提示词
 ├── src/
 │   ├── api/
@@ -161,69 +256,7 @@ Yaogu/
 └── README.md
 ```
 
-## 6. 本地运行指南
-
-### 6.1 环境变量
-
-复制 `.env.example` 为 `.env`，至少修改 `APP_SECRET` 与 `INITIAL_PASSWORD`。
-
-| 变量 | 默认 | 说明 |
-| --- | --- | --- |
-| `APP_SECRET` | 空 | 会话签名密钥；为空时每次启动随机生成（重启后需重新登录） |
-| `INITIAL_PASSWORD` | 空 | 首次建库的登录密码；为空则随机生成并打印到日志 |
-| `DB_PATH` | `data/yaogu.db` | sqlite 文件路径 |
-| `DATA_DIR` | `./data` | 数据目录 |
-| `COOKIE_SECURE` | `0` | HTTPS 部署时置 `1` |
-| `LOGIN_MAX_ATTEMPTS` | `5` | 连续失败锁定次数 |
-| `LOGIN_LOCK_SECONDS` | `300` | 锁定秒数 |
-| `HTTP_TIMEOUT_SECONDS` | `10` | 抓取超时 |
-| `HTTP_MAX_RETRIES` | `2` | 预留重试次数 |
-| `DAILY_REFRESH_TIME` | `15:30` | 每日刷新时间 |
-| `SCHEDULER_ENABLED` | `1` | 是否启用进程内定时任务 |
-| `MIN_QUOTE_COUNT` | `1000` | 有效行情条目下限，低于即判该源失败 |
-
-### 6.2 启动后端
-
-```bash
-python -m venv venv
-# Windows: venv\Scripts\activate    Linux/macOS: source venv/bin/activate
-pip install -r requirements.txt
-
-# 推荐：uvicorn 读取 .env（依赖 python-dotenv）
-python -m uvicorn src.main:app --host 0.0.0.0 --port 8000 --env-file .env
-```
-
-首次启动会建库、写入 22 个题材种子、3 个数据源与默认阈值；若未配置 `INITIAL_PASSWORD`，随机密码只打印一次到日志。
-
-API 文档：<http://127.0.0.1:8000/docs>
-
-### 6.3 启动前端开发服务器
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Vite 已把 `/api` 代理到 `127.0.0.1:8000`。访问 <http://127.0.0.1:5173>。
-
-### 6.4 生产构建
-
-```bash
-cd frontend && npm run build
-```
-
-构建产物在 `frontend/dist`。后端启动时会自动托管该目录，并支持前端路由刷新（`/pool` 等不会 404）。也可由 Nginx 托管静态资源、反向代理 `/api` 到 uvicorn。
-
-### 6.5 运行测试
-
-```bash
-python -m pytest
-```
-
-当前基线：**159 passed，覆盖率 94.55%**（门禁 80%，配置在 `pytest.ini`）。测试不访问真实行情接口：适配器用 `httpx.MockTransport` 固定报文，筛选用固定 `FetchResult` 快照。
-
-## 7. 运维与已知限制
+## 运维与已知限制
 
 - **腾讯云 IP 屏蔽**：部分免费接口会屏蔽云服务器出口 IP。部署后先在「数据源」页逐个测试；若主源长期失败，可改用收费源适配器（新增实现并注册到 `SOURCE_REGISTRY`）。
 - **一期不做**：机构持仓 <5%、解禁 / 减持 / 监管事件两条门槛（免费源不可得），界面永久提示人工核对；港股、形态深度分析、龙虎榜为二期。
@@ -231,8 +264,18 @@ python -m pytest
 - **单进程调度**：APScheduler 运行在应用进程内。多 worker 部署时须只在一个进程启用调度，或迁移到外部任务队列。
 - **同步实现偏差**：HLD 原计划 `async` 适配器 + `pytest-asyncio`；实际采用同步 httpx / sqlite + FastAPI 线程池（`def` 端点），避免 sqlite 同步调用与事件循环混用。契约与分层不变。
 
-## 8. 合规
+## 合规
 
 - 界面与报告均标注「仅做历史规律复盘，不构成投资建议」。
 - 筛选结论附带批次、数据来源与抓取时间；详情页展示数据日期。
 - 凭据全部来自环境变量，不写入代码或仓库。
+
+## 文档索引
+
+| 文档 | 内容 |
+| --- | --- |
+| [PRD.md](PRD.md) | 产品需求：用户故事、验收标准（AC） |
+| [HLD.md](HLD.md) | 概要设计：分层、模块职责、数据流 |
+| [DESIGN_SPEC.md](DESIGN_SPEC.md) | 视觉规范：配色、排版、组件、暗色主题 |
+| [TODO.md](TODO.md) | 二期待办与已知缺口 |
+| [CLAUDE.md](CLAUDE.md) | 协作约定：代码风格、分层约束、提交要求 |
